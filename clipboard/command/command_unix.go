@@ -6,7 +6,9 @@
 
 package command
 
-import "github.com/pkg/errors"
+import (
+	"fmt"
+)
 
 // textInput sends the provided text as input to the system command.
 // It wraps the underlying system call processes with additional error handling.
@@ -14,19 +16,19 @@ import "github.com/pkg/errors"
 func textInput(c sysCommand, text string) error {
 	in, err := c.StdinPipe()
 	if err != nil {
-		return errors.Wrap(err, "getting pipe for command")
+		return fmt.Errorf("getting pipe for command: %w", err)
 	}
 	if err := c.Start(); err != nil {
-		return errors.Wrap(err, "starting command")
+		return fmt.Errorf("starting command: %w", err)
 	}
 	if _, err := in.Write([]byte(text)); err != nil {
-		return errors.Wrap(err, "writing input for command")
+		return fmt.Errorf("writing input for command: %w", err)
 	}
 	if err := in.Close(); err != nil {
-		return errors.Wrap(err, "closing input")
+		return fmt.Errorf("closing input: %w", err)
 	}
 	if err := c.Wait(); err != nil {
-		return errors.Wrap(err, "waiting for command")
+		return fmt.Errorf("waiting for command: %w", err)
 	}
 	return nil
 }
@@ -36,7 +38,7 @@ func textInput(c sysCommand, text string) error {
 func textOutput(c sysCommand) (string, error) {
 	out, err := c.Output()
 	if err != nil {
-		return "", errors.Wrap(err, "getting output for command")
+		return "", fmt.Errorf("getting output for command: %w", err)
 	}
 	return string(out), nil
 }
