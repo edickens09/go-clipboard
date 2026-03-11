@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/tiagomelo/go-clipboard/clipboard/command"
+	"github.com/edickens09/go-clipboard/clipboard/command"
 )
 
 func Test_copyText(t *testing.T) {

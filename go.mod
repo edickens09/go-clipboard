@@ -1,4 +1,4 @@
-module github.com/tiagomelo/go-clipboard
+module github.com/edickens09/go-clipboard
 
 go 1.26.0
 

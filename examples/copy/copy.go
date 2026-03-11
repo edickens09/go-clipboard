@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/tiagomelo/go-clipboard/clipboard"
+	"github.com/edickens09/go-clipboard/clipboard"
 )
 
 func main() {

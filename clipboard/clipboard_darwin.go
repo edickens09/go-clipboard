@@ -9,8 +9,8 @@ package clipboard
 import (
 	"os/exec"
 
-	"github.com/tiagomelo/go-clipboard/clipboard/clipboardtool"
-	"github.com/tiagomelo/go-clipboard/clipboard/command"
+	"github.com/edickens09/go-clipboard/clipboard/clipboardtool"
+	"github.com/edickens09/go-clipboard/clipboard/command"
 )
 
 // newCmd is a convenience function that creates a new command instance.
