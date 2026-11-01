@@ -9,6 +9,16 @@ help:
 test:
 	@ go test -v ./... -count=1
 
+.PHONY: build-sync
+## build-sync: builds the clipsync command
+build-sync:
+	@ go build -o bin/ ./cmd/clipsync
+
+.PHONY: install-sync
+## install-sync: installs the clipsync command
+install-sync:
+	@ go install ./cmd/clipsync
+
 .PHONY: copy-example
 ## copy-example: runs copy example
 copy-example:
