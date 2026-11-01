@@ -18,6 +18,7 @@ import (
 type session struct {
 	syncer     *Syncer
 	conn       net.Conn
+	cs         *cipherState
 	lastSynced string
 
 	// mu guards lastSynced and serializes clipboard reads with remote writes.
@@ -31,8 +32,8 @@ type session struct {
 // one of them fails or ctx is canceled. When initial is non-nil it is used as
 // the first synchronized value; applyInitial controls whether it is written to
 // the local clipboard.
-func (s *Syncer) runSession(ctx context.Context, conn net.Conn, initial *string, applyInitial bool) error {
-	sess := &session{syncer: s, conn: conn}
+func (s *Syncer) runSession(ctx context.Context, conn net.Conn, cs *cipherState, initial *string, applyInitial bool) error {
+	sess := &session{syncer: s, conn: conn, cs: cs}
 	sess.initialize(initial, applyInitial)
 
 	errCh := make(chan error, 2)
@@ -116,7 +117,7 @@ func (s *session) localChange() (string, bool) {
 // receiveLoop applies clipboard updates received from the peer.
 func (s *session) receiveLoop() error {
 	for {
-		msg, err := readMessage(s.conn)
+		msg, err := readEncryptedMessage(s.conn, s.cs)
 		if err != nil {
 			return fmt.Errorf("reading message: %w", err)
 		}
@@ -163,5 +164,5 @@ func (s *session) applyRemote(text string) {
 func (s *session) sendClipboard(text string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return writeMessage(s.conn, message{Type: msgClipboard, Text: text})
+	return writeEncryptedMessage(s.conn, s.cs, message{Type: msgClipboard, Text: text})
 }

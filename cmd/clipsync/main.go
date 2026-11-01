@@ -39,7 +39,7 @@ func run() error {
 	var (
 		listenAddr  = flag.String("listen", "", "address to listen on, for example :9876")
 		connectAddr = flag.String("connect", "", "address of the listening peer, for example 192.168.1.10:9876")
-		token       = flag.String("token", os.Getenv("CLIPSYNC_TOKEN"), "shared secret used to authenticate the peer (default $CLIPSYNC_TOKEN)")
+		token       = flag.String("token", os.Getenv("CLIPSYNC_TOKEN"), "shared secret used to derive the AES-256-GCM key (required; default $CLIPSYNC_TOKEN)")
 		interval    = flag.Duration("interval", 500*time.Millisecond, "how often the local clipboard is checked for changes")
 		primary     = flag.Bool("primary", false, "sync the X11/Wayland primary selection instead of the clipboard (Unix only)")
 		syncInitial = flag.Bool("sync-initial", true, "send the connecting peer's clipboard when a session starts")
@@ -59,14 +59,13 @@ func run() error {
 	if *interval <= 0 {
 		return errors.New("-interval must be greater than zero")
 	}
+	if *token == "" {
+		return errors.New("a non-empty -token (or $CLIPSYNC_TOKEN) is required; generate one with: openssl rand -hex 32")
+	}
 
 	logger := log.New(io.Discard, "", 0)
 	if *verbose {
 		logger = log.New(os.Stderr, "clipsync: ", log.LstdFlags)
-	}
-
-	if *listenAddr != "" && *token == "" {
-		_, _ = fmt.Fprintln(os.Stderr, "clipsync: warning: no -token set; any peer that can reach the listener can read and write the clipboard")
 	}
 
 	syncer := clipsync.New(clipsync.Config{

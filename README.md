@@ -42,7 +42,7 @@ go install github.com/edickens09/go-clipboard/cmd/clipsync@latest
 On the first machine, start a listener:
 
 ```
-bin/clipsync -listen :9876 -token "$(openssl rand -hex 16)" -v
+bin/clipsync -listen :9876 -token "$(openssl rand -hex 32)" -v
 ```
 
 On the second machine, connect to it with the same token:
@@ -64,7 +64,7 @@ Options:
 |------|-------------|
 | `-listen ADDR` | listen for a peer on `ADDR` (use exactly one of `-listen` or `-connect`) |
 | `-connect ADDR` | connect to the listening peer at `ADDR` |
-| `-token SECRET` | shared secret used to authenticate the peer; defaults to `$CLIPSYNC_TOKEN` |
+| `-token SECRET` | shared secret used to derive the AES-256-GCM key (required); defaults to `$CLIPSYNC_TOKEN` |
 | `-interval DURATION` | how often the local clipboard is checked (default `500ms`) |
 | `-primary` | sync the X11/Wayland primary selection instead of the clipboard (Unix only) |
 | `-sync-initial` | send the connector's clipboard when a session starts (default `true`) |
@@ -75,9 +75,14 @@ embed it in another program.
 
 Notes:
 
-- Traffic is plaintext JSON over TCP. The shared token authenticates peers but
-  does not encrypt anything, so run this on a trusted network or tunnel it
-  through SSH, WireGuard, Tailscale, etc.
+- Clipboard traffic is encrypted and authenticated with AES-256-GCM. A
+  per-connection 256-bit key is derived from the shared token with HKDF-SHA256
+  and a random salt, so the token itself is never sent over the wire. Use a
+  high-entropy token (`openssl rand -hex 32`); a weak token can be brute-forced
+  offline. The protocol protects clipboard contents, not traffic metadata, so a
+  trusted network or VPN is still recommended.
+- Both peers must run the same protocol version (the same build or a compatible
+  release).
 - One side must listen and the other must connect. The listener accepts
   multiple peers, but the usual setup is one listener and one connector.
 - The platform clipboard tools listed above must be installed on each machine.

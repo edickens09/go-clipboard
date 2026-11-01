@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"log"
 	"net"
@@ -18,21 +19,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWriteReadMessage(t *testing.T) {
+func TestEncryptedMessageRoundTrip(t *testing.T) {
+	cs := newTestCipher(t, "secret")
+
 	var buf bytes.Buffer
 	want := message{Type: msgClipboard, Text: "hello, 世界"}
 
-	require.NoError(t, writeMessage(&buf, want))
+	require.NoError(t, writeEncryptedMessage(&buf, cs, want))
 
-	got, err := readMessage(&buf)
+	got, err := readEncryptedMessage(&buf, cs)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 }
 
-func TestReadMessageRejectsInvalidFrames(t *testing.T) {
+func TestReadFrameRejectsInvalidFrames(t *testing.T) {
 	t.Run("empty frame", func(t *testing.T) {
 		var header [4]byte
-		_, err := readMessage(bytes.NewReader(header[:]))
+		_, err := readFrame(bytes.NewReader(header[:]))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "empty message")
 	})
@@ -40,10 +43,72 @@ func TestReadMessageRejectsInvalidFrames(t *testing.T) {
 	t.Run("oversized frame", func(t *testing.T) {
 		var header [4]byte
 		binary.BigEndian.PutUint32(header[:], uint32(maxFrameSize+1))
-		_, err := readMessage(bytes.NewReader(header[:]))
+		_, err := readFrame(bytes.NewReader(header[:]))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "too large")
 	})
+}
+
+func TestCipherRoundTrip(t *testing.T) {
+	cs := newTestCipher(t, "secret")
+	plaintext := []byte("some clipboard text")
+
+	first, err := cs.seal(plaintext)
+	require.NoError(t, err)
+	second, err := cs.seal(plaintext)
+	require.NoError(t, err)
+	require.NotEqual(t, first, second, "each frame must use a fresh nonce")
+
+	got, err := cs.open(first)
+	require.NoError(t, err)
+	require.Equal(t, plaintext, got)
+}
+
+func TestCipherRejectsWrongToken(t *testing.T) {
+	sealer := newTestCipher(t, "right-token")
+	opener := newTestCipher(t, "wrong-token")
+
+	payload, err := sealer.seal([]byte("secret clipboard text"))
+	require.NoError(t, err)
+
+	_, err = opener.open(payload)
+	require.ErrorIs(t, err, ErrDecrypt)
+}
+
+func TestCipherRejectsTamperedPayload(t *testing.T) {
+	cs := newTestCipher(t, "secret")
+
+	payload, err := cs.seal([]byte("secret clipboard text"))
+	require.NoError(t, err)
+	payload[len(payload)-1] ^= 0xff
+
+	_, err = cs.open(payload)
+	require.ErrorIs(t, err, ErrDecrypt)
+}
+
+func TestCipherRejectsReplay(t *testing.T) {
+	cs := newTestCipher(t, "secret")
+
+	payload, err := cs.seal([]byte("secret clipboard text"))
+	require.NoError(t, err)
+
+	_, err = cs.open(payload)
+	require.NoError(t, err)
+
+	// The same frame is no longer valid at the next expected position.
+	_, err = cs.open(payload)
+	require.ErrorIs(t, err, ErrDecrypt)
+}
+
+func TestCipherRequiresToken(t *testing.T) {
+	_, err := newCipherState("", bytes.Repeat([]byte{1}, saltSize))
+	require.ErrorIs(t, err, ErrMissingToken)
+}
+
+func TestCipherRejectsInvalidSalt(t *testing.T) {
+	_, err := newCipherState("secret", []byte{1, 2, 3})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid salt length")
 }
 
 func TestNewAppliesDefaults(t *testing.T) {
@@ -54,12 +119,67 @@ func TestNewAppliesDefaults(t *testing.T) {
 	require.NotNil(t, s.cfg.Logger)
 }
 
-func TestAuthorized(t *testing.T) {
-	s := New(Config{Token: "secret"})
-	require.True(t, s.authorized("secret"))
-	require.False(t, s.authorized("wrong"))
+func TestServeRequiresToken(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
 
-	require.True(t, New(Config{}).authorized("anything"))
+	s := New(Config{Clipboard: &fakeClipboard{}})
+	require.ErrorIs(t, s.Serve(context.Background(), ln), ErrMissingToken)
+}
+
+func TestConnectRequiresToken(t *testing.T) {
+	s := New(Config{Clipboard: &fakeClipboard{}})
+	require.ErrorIs(t, s.Connect(context.Background(), "127.0.0.1:1"), ErrMissingToken)
+}
+
+func TestHandshakeDoesNotSendToken(t *testing.T) {
+	const token = "super-secret-token"
+
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+
+	client := New(Config{
+		Clipboard:   &fakeClipboard{},
+		Token:       token,
+		SyncInitial: false,
+		Logger:      log.New(io.Discard, "", 0),
+	})
+
+	type handshakeResult struct {
+		cs  *cipherState
+		err error
+	}
+	done := make(chan handshakeResult, 1)
+	go func() {
+		_, _, cs, err := client.handshakeClient(clientConn)
+		done <- handshakeResult{cs: cs, err: err}
+	}()
+
+	raw, err := readFrame(serverConn)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), token)
+
+	var hello message
+	require.NoError(t, json.Unmarshal(raw, &hello))
+	require.Equal(t, msgHello, hello.Type)
+	require.Equal(t, protocolVersion, hello.Version)
+	require.Len(t, hello.Salt, saltSize)
+
+	server, err := newCipherState(token, hello.Salt)
+	require.NoError(t, err)
+	require.NoError(t, writeEncryptedMessage(serverConn, server, message{Type: msgHello, Version: protocolVersion}))
+
+	auth, err := readEncryptedMessage(serverConn, server)
+	require.NoError(t, err)
+	require.Equal(t, msgAuth, auth.Type)
+
+	result := <-done
+	require.NoError(t, result.err)
+	require.NotNil(t, result.cs)
 }
 
 func TestSyncerSyncsClipboardBothWays(t *testing.T) {
@@ -174,6 +294,7 @@ func TestServeStopsWhenContextIsCanceled(t *testing.T) {
 
 	s := New(Config{
 		Clipboard: &fakeClipboard{},
+		Token:     "secret",
 		Logger:    log.New(io.Discard, "", 0),
 	})
 
@@ -189,6 +310,13 @@ func TestServeStopsWhenContextIsCanceled(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Serve did not stop")
 	}
+}
+
+func newTestCipher(t *testing.T, token string) *cipherState {
+	t.Helper()
+	cs, err := newCipherState(token, bytes.Repeat([]byte{0x42}, saltSize))
+	require.NoError(t, err)
+	return cs
 }
 
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {

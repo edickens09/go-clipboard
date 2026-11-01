@@ -86,6 +86,9 @@ func New(cfg Config) *Syncer {
 // ListenAndServe listens on the given TCP address and serves clipboard
 // synchronization sessions until ctx is canceled.
 func (s *Syncer) ListenAndServe(ctx context.Context, addr string) error {
+	if s.cfg.Token == "" {
+		return ErrMissingToken
+	}
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
@@ -98,6 +101,9 @@ func (s *Syncer) ListenAndServe(ctx context.Context, addr string) error {
 // each one until ctx is canceled. It closes ln before returning.
 func (s *Syncer) Serve(ctx context.Context, ln net.Listener) error {
 	defer func() { _ = ln.Close() }()
+	if s.cfg.Token == "" {
+		return ErrMissingToken
+	}
 
 	done := make(chan struct{})
 	defer close(done)
@@ -127,6 +133,9 @@ func (s *Syncer) Serve(ctx context.Context, ln net.Listener) error {
 // Authentication and protocol errors are permanent and are returned
 // immediately.
 func (s *Syncer) Connect(ctx context.Context, addr string) error {
+	if s.cfg.Token == "" {
+		return ErrMissingToken
+	}
 	delay := minReconnectDelay
 	for {
 		if ctx.Err() != nil {
@@ -179,7 +188,7 @@ func (s *Syncer) connectOnce(ctx context.Context, addr string) (bool, error) {
 	defer stop()
 	defer func() { _ = conn.Close() }()
 
-	initial, hasInitial, err := s.handshakeClient(conn)
+	initial, hasInitial, cs, err := s.handshakeClient(conn)
 	if err != nil {
 		return false, err
 	}
@@ -189,7 +198,7 @@ func (s *Syncer) connectOnce(ctx context.Context, addr string) (bool, error) {
 	if hasInitial {
 		initialPtr = &initial
 	}
-	if err := s.runSession(ctx, conn, initialPtr, false); err != nil {
+	if err := s.runSession(ctx, conn, cs, initialPtr, false); err != nil {
 		if ctx.Err() != nil {
 			return true, ctx.Err()
 		}
@@ -204,7 +213,7 @@ func (s *Syncer) handleConn(ctx context.Context, conn net.Conn) {
 	defer stop()
 	defer func() { _ = conn.Close() }()
 
-	initial, hasInitial, err := s.handshakeServer(conn)
+	initial, hasInitial, cs, err := s.handshakeServer(conn)
 	if err != nil {
 		s.logf("handshake with %s failed: %v", conn.RemoteAddr(), err)
 		return
@@ -215,7 +224,7 @@ func (s *Syncer) handleConn(ctx context.Context, conn net.Conn) {
 	if hasInitial {
 		initialPtr = &initial
 	}
-	if err := s.runSession(ctx, conn, initialPtr, true); err != nil && ctx.Err() == nil {
+	if err := s.runSession(ctx, conn, cs, initialPtr, true); err != nil && ctx.Err() == nil {
 		s.logf("session with %s ended: %v", conn.RemoteAddr(), err)
 	}
 	s.logf("peer disconnected: %s", conn.RemoteAddr())
